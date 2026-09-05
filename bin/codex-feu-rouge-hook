@@ -1,0 +1,99 @@
+#!/bin/bash
+# Pont agent -> etat du feu tricolore.
+# Usage: codex-feu-rouge-hook <state> [agent]
+#   state = running | waiting | idle | gone
+#   agent = codex (defaut) | claude | antigravity
+# Le payload JSON du hook arrive sur stdin.
+#
+# NB: le nom du script reste "codex-feu-rouge-hook" et l'agent est un argument
+# OPTIONNEL, pour que les commandes deja approuvees dans ~/.codex/config.toml
+# restent valides au hash pres (sinon il faudrait refaire /hooks).
+
+set -u
+
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/codex-feu-rouge"
+mkdir -p "$STATE_DIR" 2>/dev/null
+
+new_state="${1:-idle}"
+agent="${2:-codex}"
+payload="$(cat 2>/dev/null | tr '\n' ' ')"
+
+field() {
+  printf '%s' "$payload" \
+    | sed -n "s/.*\"$1\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" \
+    | head -1
+}
+
+# Premier element d'un champ tableau : "workspacePaths": ["/chemin", ...]
+field_arr() {
+  printf '%s' "$payload" \
+    | sed -n "s/.*\"$1\"[[:space:]]*:[[:space:]]*\[[[:space:]]*\"\([^\"]*\)\".*/\\1/p" \
+    | head -1
+}
+
+sid="$(field session_id)"
+[ -z "$sid" ] && sid="$(field sessionId)"
+[ -z "$sid" ] && sid="$(field conversation_id)"
+[ -z "$sid" ] && sid="$(field conversationId)"
+[ -z "$sid" ] && sid="pid-$PPID"
+sid="$(printf '%s' "$sid" | tr -c 'A-Za-z0-9._-' '_')"
+
+file="$STATE_DIR/$agent-$sid.json"
+
+# Claude Code n'a pas d'evenement de permission dedie : son "Notification" sert
+# aussi bien a "j'ai besoin d'une autorisation" qu'a "j'attends ta saisie", ce
+# dernier tirant apres ~60 s d'inactivite. Sans ce tri, la pastille repassait au
+# rouge juste apres le vert de fin de tour. Seul un message de permission
+# justifie le rouge.
+if [ "$new_state" = "waiting" ]; then
+  msg="$(field message)"
+  if [ -n "$msg" ]; then
+    case "$msg" in
+      *permission*|*Permission*|*approve*|*Approve*|*autoris*|*Autoris*) : ;;
+      *) new_state="idle" ;;
+    esac
+  fi
+fi
+
+ack() { [ "$agent" = "antigravity" ] && printf '{}\n'; return 0; }
+
+if [ "$new_state" = "gone" ]; then
+  rm -f "$file"
+  ack
+  exit 0
+fi
+
+# Remonte la chaine des parents jusqu'au process de l'agent qui nous a lances,
+# pour que l'app puisse detecter une session morte sans SessionEnd.
+agent_pid="$PPID"
+p="$PPID"
+for _ in 1 2 3 4 5 6 7 8; do
+  read -r pp comm <<<"$(ps -o ppid=,comm= -p "$p" 2>/dev/null)"
+  [ -z "${pp:-}" ] && break
+  case "$comm" in
+    *codex*|*claude*|*agy*|*antigravity*|*node*) agent_pid="$p"; break ;;
+  esac
+  [ "$pp" -le 1 ] 2>/dev/null && break
+  p="$pp"
+done
+
+# Le dossier du projet. Antigravity n'envoie pas de cwd et laisse
+# workspacePaths vide en mode CLI ; en plus il lance les hooks depuis le
+# dossier de hooks.json, donc $PWD ne vaut rien ici. On interroge alors
+# directement le repertoire courant du process de l'agent.
+cwd="$(field cwd)"
+[ -z "$cwd" ] && cwd="$(field_arr workspacePaths)"
+if [ -z "$cwd" ] && [ "$agent_pid" -gt 0 ] 2>/dev/null; then
+  cwd="$(lsof -a -d cwd -p "$agent_pid" -Fn 2>/dev/null | sed -n 's/^n//p' | head -1)"
+fi
+[ -z "$cwd" ] && cwd="$PWD"
+
+esc() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+
+tmp="$file.$$"
+printf '{"state":"%s","agent":"%s","cwd":"%s","pid":%s,"ts":%s}\n' \
+  "$(esc "$new_state")" "$(esc "$agent")" "$(esc "$cwd")" "$agent_pid" "$(date +%s)" > "$tmp" 2>/dev/null \
+  && mv -f "$tmp" "$file" 2>/dev/null
+
+ack
+exit 0

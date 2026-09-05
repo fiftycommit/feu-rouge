@@ -1,27 +1,73 @@
-# Feu Rouge Codex
+# Feu Rouge
 
-Pastille tricolore dans la **barre de menus** macOS, qui reflète l'état des sessions
-`codex` CLI ouvertes.
+Feu tricolore dans la **barre de menus** macOS : une pastille par session d'agent
+CLI ouverte — `codex`, Claude Code, Antigravity.
 
 | Pastille | État |
 |---|---|
-| 🟡 jaune | codex travaille (tour en cours, outil en train de tourner) |
-| 🔴 rouge | codex attend une action de ta part (demande d'autorisation) |
-| 🟢 vert  | au moins une session ouverte et disponible |
-| ⚪ gris  | aucune session codex |
+| 🟡 jaune | l'agent travaille (tour en cours, outil en train de tourner) |
+| 🔴 rouge | l'agent attend une action de ta part (demande d'autorisation) |
+| 🟢 vert  | session ouverte et disponible |
+| ⚪ gris  | aucune session (pastille unique) |
 
-Quand plusieurs sessions tournent, la pastille montre la plus « urgente »
-(rouge > jaune > vert). Le menu déroulant détaille chaque session par projet.
+La **forme** distingue l'agent, sans avoir à ouvrir le menu :
+
+| Agent | Forme | Hooks | Rouge |
+|---|---|---|---|
+| codex | ● rond | `~/.codex/hooks.json` | oui (`PermissionRequest`) |
+| Claude Code | ▢ carré arrondi | `~/.claude/settings.json` | oui (`Notification`) |
+| Antigravity (`agy`) | ◆ losange | `~/.gemini/config/hooks.json` | **non** |
+
+Le menu de chaque pastille donne `agent · projet — état`, le chemin complet, et
+l'ouvre dans le Finder d'un clic.
 
 > macOS ne permet pas d'ajouter un module tiers au **Centre de contrôle** :
 > la barre de menus est la seule cible possible.
 
+## Installation
+
+```sh
+git clone git@github.com:fiftycommit/feu-rouge.git
+cd feu-rouge
+./install.sh
+```
+
+Puis, **une seule fois**, dans une session codex : `/hooks` → touche `t` pour faire
+confiance aux entrées `codex-feu-rouge-hook`. Claude Code et Antigravity ne
+demandent aucune approbation.
+
+Dans tous les cas, les hooks ne s'appliquent qu'aux **nouvelles** sessions : une
+fenêtre déjà ouverte au moment de l'installation doit être relancée
+(`codex resume --last` conserve la conversation).
+
+`install.sh` :
+
+- câble les hooks des trois agents, en sauvegardant chaque fichier existant en
+  `.bak.<horodatage>` ; l'opération est idempotente, une réinstallation ne
+  duplique rien ;
+- installe le LaunchAgent `fr.max.feurouge` (`RunAtLoad`, `KeepAlive`) ;
+- compile l'app si besoin et la lance.
+
+Une fois installé, rien n'est à refaire au redémarrage : réglages des hooks,
+approbations codex et LaunchAgent sont tous persistés sur disque.
+
+### Déplacer ou cloner ailleurs
+
+`install.sh` inscrit le **chemin absolu** du dépôt dans les trois fichiers de
+hooks et dans le LaunchAgent. Déplacer le dossier, ou le cloner sur une autre
+machine, casse donc l'installation précédente : il faut relancer `./install.sh`
+depuis le nouvel emplacement.
+
+Et comme codex approuve ses hooks par un hash qui inclut la commande — chemin
+compris — le changement de chemin **invalide les approbations**. Il faut refaire
+`/hooks` une fois côté codex.
+
 ## Comment ça marche
 
-Les **hooks** de codex CLI (≥ 0.153) écrivent l'état dans
-`~/.local/state/codex-feu-rouge/<session_id>.json` :
+Les hooks de chaque agent appellent `bin/codex-feu-rouge-hook <état> [agent]`,
+qui écrit `~/.local/state/codex-feu-rouge/<agent>-<session>.json`.
 
-| Hook | État écrit |
+| Événement | État écrit |
 |---|---|
 | `SessionStart` | vert |
 | `UserPromptSubmit`, `PreToolUse`, `PostToolUse` | jaune |
@@ -29,24 +75,32 @@ Les **hooks** de codex CLI (≥ 0.153) écrivent l'état dans
 | `Stop`, `Interrupt` | vert |
 | `SessionEnd` | fichier supprimé |
 
-L'app relit ce dossier toutes les 0,5 s. Chaque fichier mémorise le PID du process
-codex parent : si une session meurt sans `SessionEnd` (crash, `kill`), l'app détecte
-le PID mort et nettoie — pas de pastille fantôme.
+L'app relit ce dossier toutes les 0,5 s et ne redessine que si l'état a changé.
+Chaque fichier mémorise le PID du process de l'agent : si une session meurt sans
+`SessionEnd` (crash, `kill`), l'app détecte le PID mort et nettoie — pas de
+pastille fantôme. Un verrou `flock` garantit une seule instance de l'app.
 
-## Installation
+### Particularités par agent
 
-```sh
-./install.sh
-```
+**Claude Code** n'a pas d'événement de permission dédié : son `Notification` sert
+aussi bien à « j'ai besoin d'une autorisation » qu'à « j'attends ta saisie »,
+ce dernier tirant après ~60 s d'inactivité. Le script tranche sur le contenu du
+message ; sans ce tri, la pastille repassait au rouge juste après le vert de fin
+de tour.
 
-Puis, **une seule fois**, dans une session codex : `/hooks` → faire confiance aux
-entrées `codex-feu-rouge-hook`. Les hooks ne s'appliquent qu'aux **nouvelles**
-sessions codex.
+**Antigravity** utilise un schéma qui lui est propre : la clé de premier niveau
+de `hooks.json` est le *nom* du hook (`feu-rouge`), les événements sont dedans,
+et le hook doit répondre un objet JSON sur stdout. Il n'expose que cinq
+événements (`PreInvocation`, `PreToolUse`, `PostToolUse`, `PostInvocation`,
+`Stop`) : aucun ne signale une demande d'autorisation ni la fin d'une session.
+Ses pastilles ne passent donc jamais au rouge et disparaissent à la mort du
+process. Il n'envoie par ailleurs aucun dossier de travail (`workspacePaths`
+arrive vide en CLI) : le projet est déduit du répertoire courant du process.
 
-`install.sh` :
-- crée/complète `~/.codex/hooks.json` (sauvegarde `.bak.<ts>` si le fichier existait) ;
-- installe un LaunchAgent `fr.max.feurouge` (relance l'app à l'ouverture de session) ;
-- lance l'app.
+Le nom du script est resté `codex-feu-rouge-hook` et l'agent y est un argument
+**optionnel** : les commandes codex sont ainsi restées identiques au caractère
+près lors de l'ajout des deux autres agents, ce qui a préservé les approbations
+existantes.
 
 ## Désinstallation
 
@@ -56,33 +110,17 @@ sessions codex.
 
 ## Fichiers
 
-- `bin/codex-feu-rouge-hook` — script appelé par les hooks, écrit l'état
+- `bin/codex-feu-rouge-hook` — pont hook → fichier d'état
 - `src/main.swift` — app barre de menus (AppKit, sans dépendance)
 - `build.sh` — compile `build/FeuRouge.app`
+- `install.sh` / `uninstall.sh`
 
 ## Dépannage
 
-- **Pastille invisible** : si la barre de menus est pleine, macOS range l'icône dans
-  le débordement `•••` (à gauche de la batterie). Cliquer dessus, ou masquer un autre
-  élément dans Réglages → Barre des menus.
+- **Pastille invisible** : si la barre de menus est pleine, macOS range l'icône
+  dans le débordement `•••`. Avec un gestionnaire type Bartender, ajouter
+  `fr.max.feurouge-Item-0` … `-Item-N` à la liste « Show » (une entrée par
+  pastille possible), sans quoi `special.AllOtherItems` les masque.
 - **Pastille figée** : `ls ~/.local/state/codex-feu-rouge/` pour voir l'état brut.
 - **Position de l'icône** : `FEUROUGE_DEBUG=1 ./build/FeuRouge.app/Contents/MacOS/FeuRouge`
-  affiche les coordonnées de l'élément (x négatif = masqué faute de place).
-
-## Agents pris en charge
-
-| Agent | Forme | Configuration des hooks | Rouge (attente d'une action) |
-|---|---|---|---|
-| codex | rond | `~/.codex/hooks.json` | oui (`PermissionRequest`) |
-| Claude Code | carre arrondi | `~/.claude/settings.json` | oui (`Notification`) |
-| Antigravity (`agy`) | losange | `~/.gemini/config/hooks.json` | **non** |
-
-Antigravity n'expose que cinq evenements (`PreInvocation`, `PreToolUse`,
-`PostToolUse`, `PostInvocation`, `Stop`), aucun ne signalant une demande
-d'autorisation ni la fin d'une session. Ses pastilles ne passent donc jamais au
-rouge, et disparaissent quand le process meurt plutot que sur un `SessionEnd`.
-Son `hooks.json` suit un schema qui lui est propre : la cle de premier niveau
-est le *nom* du hook (`feu-rouge`), les evenements sont dedans, et le hook doit
-repondre un objet JSON sur stdout.
-
-Seul codex demande une approbation explicite des hooks (`/hooks`, touche `t`).
+  affiche les coordonnées des éléments (x négatif = masqué faute de place).

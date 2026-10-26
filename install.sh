@@ -1,5 +1,5 @@
 #!/bin/bash
-# Installe les hooks (codex, claude code, antigravity) + l'app barre de menus.
+# Installe les hooks et l'extension OMP + l'app barre de menus.
 set -euo pipefail
 cd "$(dirname "$0")"
 ROOT="$(pwd)"
@@ -7,7 +7,10 @@ HOOK="$ROOT/bin/codex-feu-rouge-hook"
 CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
 HOOKS_FILE="$CODEX_HOME/hooks.json"
 
-[ -x "$ROOT/build/FeuRouge.app/Contents/MacOS/FeuRouge" ] || ./build.sh
+APP_BIN="$ROOT/build/FeuRouge.app/Contents/MacOS/FeuRouge"
+if [ ! -x "$APP_BIN" ] || [ "$ROOT/src/main.swift" -nt "$APP_BIN" ] || [ "$ROOT/build.sh" -nt "$APP_BIN" ]; then
+  ./build.sh
+fi
 
 mkdir -p "$CODEX_HOME"
 
@@ -108,6 +111,16 @@ if [ -d "$HOME/.gemini/config" ]; then
   mv "$AGY_HOOKS.tmp" "$AGY_HOOKS"
   echo "hooks antigravity -> $AGY_HOOKS"
 fi
+
+# --- extension oh my pi --------------------------------------------------
+OMP_EXTENSIONS="${PI_CODING_AGENT_DIR:-$HOME/.omp/agent}/extensions"
+mkdir -p "$OMP_EXTENSIONS"
+OMP_EXTENSION="$OMP_EXTENSIONS/feu-rouge.ts"
+if [ -e "$OMP_EXTENSION" ] && ! cmp -s "$ROOT/extensions/feu-rouge.ts" "$OMP_EXTENSION"; then
+  cp "$OMP_EXTENSION" "$OMP_EXTENSION.bak.$(date +%s)"
+fi
+cp "$ROOT/extensions/feu-rouge.ts" "$OMP_EXTENSION"
+echo "extension omp -> $OMP_EXTENSION"
 
 # --- lancement au demarrage ---------------------------------------------
 PLIST="$HOME/Library/LaunchAgents/fr.max.feurouge.plist"

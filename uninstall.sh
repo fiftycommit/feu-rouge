@@ -16,6 +16,8 @@ if [ -f "$HOOKS_FILE" ]; then
   echo "hooks retires de $HOOKS_FILE"
 fi
 
+rm -f "${PI_CODING_AGENT_DIR:-$HOME/.omp/agent}/extensions/feu-rouge.ts"
+
 launchctl bootout "gui/$UID/fr.max.feurouge" 2>/dev/null || true
 rm -f "$HOME/Library/LaunchAgents/fr.max.feurouge.plist"
 pkill -f 'FeuRouge.app/Contents/MacOS/FeuRouge' 2>/dev/null || true

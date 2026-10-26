@@ -37,23 +37,31 @@ enum Light: Int {
 
 /// Chaque agent a sa forme, pour les distinguer sans ouvrir le menu.
 enum Agent: String {
-    case codex, claude, antigravity
+    case codex, claude, antigravity, omp
 
     var label: String {
         switch self {
         case .codex:       return "codex"
         case .claude:      return "claude"
         case .antigravity: return "antigravity"
+        case .omp:         return "omp"
         }
     }
 
-    /// codex = rond, claude = carre arrondi, antigravity = losange.
+    /// codex = rond, claude = carre arrondi, antigravity = losange, omp = triangle.
     func path(in r: NSRect) -> NSBezierPath {
         switch self {
         case .codex:
             return NSBezierPath(ovalIn: r)
         case .claude:
             return NSBezierPath(roundedRect: r.insetBy(dx: 0.4, dy: 0.4), xRadius: 3, yRadius: 3)
+        case .omp:
+            let p = NSBezierPath()
+            p.move(to: NSPoint(x: r.midX, y: r.maxY))
+            p.line(to: NSPoint(x: r.maxX, y: r.minY))
+            p.line(to: NSPoint(x: r.minX, y: r.minY))
+            p.close()
+            return p
         case .antigravity:
             let p = NSBezierPath()
             let d = r.insetBy(dx: -0.7, dy: -0.7)
